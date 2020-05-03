@@ -1,0 +1,71 @@
+#cloud-configs
+
+users:
+- name: cloudservice
+  uid: 2000
+
+write_files:
+- path: /var/tmp/environment
+  permissions: 0644
+  owner: root
+  content: |
+    IMAGE=gcr.io/$PROJECT/hello-app@sha256:f54ed9aed72ba6ad42429114a178dc06cccd5deefa3dc0131bc2b2851e680884
+    ATTESTOR=myattestor
+    ATTESTOR_PROJECT=$PROJECT
+
+- path: /var/tmp/verify.sh
+  permissions: 0644
+  owner: root
+  content: |
+    apt-get install -yq  jq 
+    # toolbox gcloud isn't uptodate yet
+    /google-cloud-sdk/bin/gcloud components update -q
+    for key in $(/google-cloud-sdk/bin/gcloud beta container binauthz attestors describe myattestor    --format=json | jq -r '.userOwnedDrydockNote.publicKeys[].id')
+    do 
+      COUNT=`/google-cloud-sdk/bin/gcloud beta container binauthz attestations list --attestor=$1  --attestor-project=$2  --filter="(resourceUri=https://$3 AND attestation.signatures[].publicKeyId=$key)" --format=json | /usr/bin/jq '. | length'`
+      if [ $COUNT -eq 0 ]; then
+        echo "PublicKeyID: $key not found in Attestation"
+        exit 1
+      fi
+    done
+    exit 0    
+
+- path: /var/tmp/deploy.sh
+  permissions: 0644
+  owner: root
+  content: |
+    for i in {1..100}; do 
+      source /var/tmp/environment 
+      /usr/bin/toolbox --bind /var/tmp/:/var/tmp /bin/bash /var/tmp/verify.sh $ATTESTOR $ATTESTOR_PROJECT $IMAGE
+      if [ $? -eq 0 ]; then 
+        echo "Binary Authorization Succeeded"
+        systemctl daemon-reload
+        systemctl start cloudservice.service
+        break
+      else 
+        echo "Binary Authorization Failed"
+        sleep 60
+      fi 
+    done 
+
+
+- path: /etc/systemd/system/cloudservice.service
+  permissions: 0644
+  owner: root
+  content: |
+    [Unit]
+    Description=Start binauthz docker container
+    Wants=gcr-online.target
+    After=gcr-online.target
+
+    [Service]
+    Environment="HOME=/home/cloudservice"
+    EnvironmentFile= /var/tmp/environment
+    ExecStartPre=/usr/bin/docker-credential-gcr configure-docker    
+    ExecStart=/usr/bin/docker run --rm -p 8080:8080 -u 2000 --name=mycloudservice $IMAGE
+    ExecStop=/usr/bin/docker stop mycloudservice
+    ExecStopPost=/usr/bin/docker rm mycloudservice
+
+runcmd:
+- /bin/bash /var/tmp/deploy.sh
+
