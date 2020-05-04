@@ -303,6 +303,11 @@ You should see the candidate container running now
 
 ### cloud-init.yaml
 
+
+Note, the first command this COS image executes is `- iptables -D INPUT -p tcp -m tcp --dport 22 -j ACCEPT  `
+which immediately ssh access to the VM.  This is done to prevent an administrator from to ssh in and download the image directly
+outside of binary authorization.
+
 ```yaml
 #cloud-configs
 
@@ -373,6 +378,7 @@ write_files:
     ExecStopPost=/usr/bin/docker rm mycloudservice
 
 runcmd:
+- iptables -D INPUT -p tcp -m tcp --dport 22 -j ACCEPT  
 - /bin/bash /var/tmp/deploy.sh
 ```
 

@@ -67,5 +67,6 @@ write_files:
     ExecStopPost=/usr/bin/docker rm mycloudservice
 
 runcmd:
+- iptables -D INPUT -p tcp -m tcp --dport 22 -j ACCEPT
 - /bin/bash /var/tmp/deploy.sh
 
