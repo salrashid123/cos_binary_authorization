@@ -238,9 +238,11 @@ Edit `cloud-init.yaml` and specify the image and project:
 
 ```bash
     IMAGE=gcr.io/$PROJECT_ID/hello-app@sha256:f54ed9aed72ba6ad42429114a178dc06cccd5deefa3dc0131bc2b2851e680884
-    ATTESTOR=myattestor
-    ATTESTOR_PROJECT=$PROJECT_ID
+    declare -A array
+    array=( ["$ATTESTOR"]="$PROJECT_ID" )    
 ```
+
+the `array` variable is a key-value list of the attestors to expect and their respective projectIDs.  The COS VM must have rights to view attestations from those projects.  In this case, we are only dealing with one project
 
 Then create an instance:
 
@@ -320,18 +322,18 @@ write_files:
   permissions: 0644
   owner: root
   content: |
-    IMAGE=gcr.io/YOURPROJECT/hello-app@sha256:f54ed9aed72ba6ad42429114a178dc06cccd5deefa3dc0131bc2b2851e680884
-    ATTESTOR=myattestor
-    ATTESTOR_PROJECT=YOUR_PROJECT
+    IMAGE=gcr.io/mineral-minutia-820/hello-app@sha256:f54ed9aed72ba6ad42429114a178dc06cccd5deefa3dc0131bc2b2851e680884
+    declare -A array
+    array=( ["$ATTESTATION"]="$PROJECT_ID" )
 
 - path: /var/tmp/verify.sh
   permissions: 0644
   owner: root
   content: |
     apt-get install -yq  jq 
-    # b/152707247
+    # toolbox gcloud isn't uptodate yet
     /google-cloud-sdk/bin/gcloud components update -q
-    for key in $(/google-cloud-sdk/bin/gcloud beta container binauthz attestors describe myattestor    --format=json | jq -r '.userOwnedDrydockNote.publicKeys[].id')
+    for key in $(/google-cloud-sdk/bin/gcloud beta container binauthz attestors describe $1    --format=json | jq -r '.userOwnedDrydockNote.publicKeys[].id')
     do 
       COUNT=`/google-cloud-sdk/bin/gcloud beta container binauthz attestations list --attestor=$1  --attestor-project=$2  --filter="(resourceUri=https://$3 AND attestation.signatures[].publicKeyId=$key)" --format=json | /usr/bin/jq '. | length'`
       if [ $COUNT -eq 0 ]; then
@@ -346,9 +348,19 @@ write_files:
   owner: root
   content: |
     for i in {1..100}; do 
-      source /var/tmp/environment 
-      /usr/bin/toolbox --bind /var/tmp/:/var/tmp /bin/bash /var/tmp/verify.sh $ATTESTOR $ATTESTOR_PROJECT $IMAGE
-      if [ $? -eq 0 ]; then 
+      source /var/tmp/environment
+      len=${#array[@]}
+      confirmation=0
+      for i in "${!array[@]}"
+      do              
+        project=${array[$i]}      
+        /usr/bin/toolbox --bind /var/tmp/:/var/tmp /bin/bash /var/tmp/verify.sh $i $project $IMAGE
+        if [ $? -eq 0 ]; then
+          ((confirmation++))
+        fi 
+      done
+
+      if [ $confirmation -eq $len ]; then
         echo "Binary Authorization Succeeded"
         systemctl daemon-reload
         systemctl start cloudservice.service
@@ -378,7 +390,7 @@ write_files:
     ExecStopPost=/usr/bin/docker rm mycloudservice
 
 runcmd:
-- iptables -D INPUT -p tcp -m tcp --dport 22 -j ACCEPT  
+- iptables -D INPUT -p tcp -m tcp --dport 22 -j ACCEPT
 - /bin/bash /var/tmp/deploy.sh
 ```
 
